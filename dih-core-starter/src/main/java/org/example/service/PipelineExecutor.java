@@ -45,13 +45,14 @@ public class PipelineExecutor {
         long startTime = Instant.now().toEpochMilli();
         Object currentData = null; // Данные, передаваемые между шагами
 
+        // Context object to pass to the step's execute method.
+        PipelineContext pipelineContext = new PipelineContext(executionId, startTime);
+
         // Critical: Initialize ThreadLocal context.
-        PipelineContextHolder.initializeContext(executionId);
+        PipelineContextHolder.initializeContext(pipelineContext);
 
         String status = "success";
         try {
-            // Context object to pass to the step's execute method.
-            PipelineContext pipelineContext = new PipelineContext(executionId, startTime);
 
             System.out.println("Starting Pipeline '" + definition.name() + "' (ID: " + executionId + ")");
 
