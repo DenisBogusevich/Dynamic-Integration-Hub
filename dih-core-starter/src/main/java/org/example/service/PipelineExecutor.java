@@ -1,0 +1,92 @@
+package org.example.service;
+
+import org.example.model.PipelineDefinition;
+import org.example.model.StepDefinition;
+import org.example.scope.PipelineContextHolder;
+import org.example.step.PipelineContext;
+import org.example.step.PipelineStep; // Предполагаем, что DIH-101 завершена
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.util.UUID;
+
+/**
+ * The core execution orchestrator for dynamic pipelines.
+ * Manages the lifecycle of a single pipeline run, ensuring context isolation
+ * and sequential execution of registered steps.
+ */
+@Service
+public class PipelineExecutor {
+
+    private final ApplicationContext context;
+
+    @Autowired
+    public PipelineExecutor(ApplicationContext context) {
+        this.context = context;
+    }
+
+    /**
+     * Executes the pipeline defined by the configuration.
+     *
+     * @param definition The blueprint of the pipeline to run.
+     * @return The final result produced by the last step.
+     */
+    public Object executePipeline(PipelineDefinition definition) {
+        // 1. Управление контекстом (Execution Context Management)
+        String executionId = UUID.randomUUID().toString();
+        long startTime = Instant.now().toEpochMilli();
+        Object currentData = null; // Данные, передаваемые между шагами
+
+        // Critical: Initialize ThreadLocal context.
+        PipelineContextHolder.initializeContext(executionId);
+
+        try {
+            // Context object to pass to the step's execute method.
+            PipelineContext pipelineContext = new PipelineContext(executionId, startTime);
+
+            System.out.println("Starting Pipeline '" + definition.name() + "' (ID: " + executionId + ")");
+
+            // 2. Итерация и выполнение шагов (Step Iteration and Execution)
+            for (StepDefinition stepDef : definition.steps()) {
+                String beanName = definition.name() + "_" + stepDef.id();
+
+                // 2.1. Получение бина из Spring Context
+                // Поскольку мы не знаем конкретные Generics I, O, мы используем Object
+                // и приводим к общему контракту PipelineStep.
+                Object stepBean = context.getBean(beanName);
+
+                // 2.2. Проверка типа (Defensive Programming)
+                if (!(stepBean instanceof PipelineStep)) {
+                    throw new IllegalStateException("Bean '" + beanName +
+                            "' is not a PipelineStep. Check StepTypeRegistry registration.");
+                }
+
+                // Безопасное приведение типа для исполнения
+                PipelineStep<Object, Object> step = (PipelineStep<Object, Object>) stepBean;
+
+                System.out.println("Executing step: " + beanName + " with input: " + (currentData != null ? currentData.getClass().getSimpleName() : "null"));
+
+                // 2.3. Выполнение шага и передача результата
+                currentData = step.execute(currentData, pipelineContext);
+            }
+
+            System.out.println("Pipeline '" + definition.name() + "' finished successfully.");
+            return currentData;
+
+        } catch (NoSuchBeanDefinitionException e) {
+            // Обработка, если регистрация пайплайна не была выполнена
+            System.err.println("Pipeline execution failed: One or more steps not registered. " + e.getMessage());
+            throw new RuntimeException("Execution failure due to missing step registration.", e);
+        } catch (Exception e) {
+            // Обработка ошибок исполнения (будет доработано в Epic 2: Retry)
+            System.err.println("Pipeline execution failed for ID " + executionId + ": " + e.getMessage());
+            throw new RuntimeException("Pipeline execution failed.", e);
+        } finally {
+            // Critical: Cleanup ThreadLocal context to prevent memory leaks and state pollution.
+            PipelineContextHolder.cleanup();
+        }
+    }
+}
