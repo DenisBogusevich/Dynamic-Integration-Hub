@@ -41,12 +41,13 @@ public class PipelineExecutor {
     public Object executePipeline(PipelineDefinition definition) {
         Timer.Sample sample = Timer.start(meterRegistry);
         // 1. Управление контекстом (Execution Context Management)
+        String pipelineName = definition.name();
         String executionId = UUID.randomUUID().toString();
         long startTime = Instant.now().toEpochMilli();
         Object currentData = null; // Данные, передаваемые между шагами
 
         // Context object to pass to the step's execute method.
-        PipelineContext pipelineContext = new PipelineContext(executionId, startTime);
+        PipelineContext pipelineContext = new PipelineContext(executionId, startTime,pipelineName);
 
         // Critical: Initialize ThreadLocal context.
         PipelineContextHolder.initializeContext(pipelineContext);

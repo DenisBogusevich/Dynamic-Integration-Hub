@@ -43,6 +43,9 @@ public class PipelineContextHolder {
         return ctx != null ? ctx.executionId() : null;
     }
 
+    public static void removeContext() {
+        THREAD_CONTEXT.remove();
+    }
 
     /**
      * Очищает контекст, вызывая все Destruction Callbacks и удаляя ссылки.
