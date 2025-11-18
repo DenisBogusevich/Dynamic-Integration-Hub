@@ -23,37 +23,32 @@ public class RetryMethodInterceptor implements MethodInterceptor {
 
     @Override
     public Object invoke(MethodInvocation invocation) throws Throwable {
-        // Проверяем, что политика не null.
-        // В идеале BeanPostProcessor не должен создавать прокси, если policy==null,
-        // но эта проверка добавляет устойчивости.
-        if (retryPolicy == null || retryPolicy.maxAttempts() <= 1) {
-            return invocation.proceed();
-        }
-
         int maxAttempts = retryPolicy.maxAttempts();
         long delay = retryPolicy.delay();
-        int attempts = 0;
 
-        while (true) { // Бесконечный цикл, выход из которого контролируется return/throw
-            attempts++;
+        // Loop runs from 1 to maxAttempts. This controls the total number of calls
+        // to invocation.proceed().
+        for (int attempts = 1; attempts <= maxAttempts; attempts++) {
             try {
-                // 1. Попытка выполнения оригинального метода (execute())
+                // 1. Успешный вызов: Немедленный выход из метода и цикла.
                 return invocation.proceed();
+
             } catch (Exception e) {
 
-                // 2. Проверка, исчерпаны ли попытки
-                if (attempts >= maxAttempts) {
-                    // Последняя попытка провалена, выбрасываем оригинальное исключение
-                    System.err.println("Execution failed after " + attempts +
-                            " attempts for method " + invocation.getMethod().getName());
+                // 2. Проверка лимита: Если это последняя разрешенная попытка
+                if (attempts == maxAttempts) {
+                    System.err.println("RETRY EXHAUSTED: Max attempts (" + maxAttempts + ") reached. Throwing final exception.");
+                    // КРИТИЧНО: Перебрасываем оригинальное исключение, чтобы его поймал PipelineExecutor.
                     throw e;
                 }
 
-                // 3. Логирование и backoff
-                System.out.println("Attempt " + attempts + " failed. Retrying in " + delay + "ms. Error: " + e.getMessage());
-                // В продакшене тут можно добавить Jitter к задержке
+                // 3. Продолжение: Логирование, задержка и переход к следующей итерации for-цикла.
+                System.out.println("Attempt " + attempts + " failed. Retrying in " + delay + "ms.");
                 Thread.sleep(delay);
             }
         }
+
+        // Этот код должен быть недостижим благодаря for-циклу и throw e.
+        throw new IllegalStateException("Critical error: Retry loop logic failed to terminate properly.");
     }
 }

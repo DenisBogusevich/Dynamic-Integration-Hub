@@ -56,6 +56,13 @@ public class PipelineRegistrar {
             stepDefinition.properties().forEach(stepDefinitionBuilder::addPropertyValue);
         }
 
+        // *** КРИТИЧЕСКОЕ ДОБАВЛЕНИЕ: СОХРАНЕНИЕ МЕТАДАННЫХ ***
+        if (stepDefinition.retryPolicy() != null) {
+            // Используем BeanDefinition.setAttribute для хранения кастомной информации
+            stepDefinitionBuilder.getRawBeanDefinition().setAttribute(
+                    "retryPolicy", stepDefinition.retryPolicy());
+        }
+
         stepDefinitionBuilder.setScope("pipeline");
 
         String beanName = pipelineName + "_" + stepDefinition.id();
