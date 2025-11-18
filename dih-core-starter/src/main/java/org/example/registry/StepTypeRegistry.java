@@ -1,6 +1,7 @@
 package org.example.registry;
 
 import org.example.exception.StepTypeNotFoundException;
+import org.example.step.PipelineStep;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -22,6 +23,13 @@ public class StepTypeRegistry {
      * @param clazz The actual Java class that implements this step.
      */
     public void register(String type, Class<?> clazz) {
+
+        if(!PipelineStep.class.isAssignableFrom(clazz)) {
+            throw new IllegalArgumentException(
+                    "Class '" + clazz.getName() + "' must implement the PipelineStep interface."
+            );
+        }
+
         // Можно добавить валидацию, например, проверять, что clazz реализует интерфейс PipelineStep
         if (stepMap.containsKey(type)) {
             // Логируем предупреждение о перезаписи, если нужно
