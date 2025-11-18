@@ -1,5 +1,6 @@
 package org.example.aop;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.example.model.RetryPolicyDefinition;
 import org.example.step.PipelineStep; // Используем наш контракт
 
@@ -7,6 +8,7 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -20,6 +22,12 @@ import org.springframework.stereotype.Component;
 public class RetryBeanPostProcessor implements BeanPostProcessor, BeanFactoryAware {
 
     private ConfigurableListableBeanFactory beanFactory;
+    private final MeterRegistry meterRegistry;
+
+    @Autowired
+    public RetryBeanPostProcessor(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
 
     /**
      * Injects the BeanFactory, allowing access to low-level BeanDefinitions and attributes.
@@ -63,8 +71,7 @@ public class RetryBeanPostProcessor implements BeanPostProcessor, BeanFactoryAwa
 
         // 5. Добавление нашего интерцептора с инжектированной политикой
         // Мы передаем DTO RetryPolicyDefinition в конструктор интерцептора
-        proxyFactory.addAdvice(new RetryMethodInterceptor(policy));
-
+        proxyFactory.addAdvice(new RetryMethodInterceptor(policy, meterRegistry, beanName));
         System.out.println("Applied Retry Proxy to bean: " + beanName +
                 " (Max Attempts: " + policy.maxAttempts() + ", Delay: " + policy.delay() + "ms)");
 

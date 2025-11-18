@@ -1,5 +1,7 @@
 package org.example.aop;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
 import org.example.model.RetryPolicyDefinition;
@@ -12,13 +14,26 @@ public class RetryMethodInterceptor implements MethodInterceptor {
 
     // Политика неизменяема и передается при создании прокси
     private final RetryPolicyDefinition retryPolicy;
+    private final Counter retryCounter;
 
     /**
      * Constructs the interceptor with the specific retry policy for this step's bean.
      * @param retryPolicy The fault tolerance configuration (maxAttempts, delay).
+     * @param meterRegistry The Micrometer registry instance.
+     * @param beanName The unique bean name (e.g., PipelineName_StepId) for tagging.
      */
-    public RetryMethodInterceptor(RetryPolicyDefinition retryPolicy) {
+    public RetryMethodInterceptor(RetryPolicyDefinition retryPolicy, MeterRegistry meterRegistry, String beanName) {
         this.retryPolicy = retryPolicy;
+
+        String[] parts = beanName.split("_", 2);
+        String pipelineName = parts.length > 0 ? parts[0] : "unknown";
+        String stepId = parts.length > 1 ? parts[1] : beanName;
+
+        this.retryCounter = Counter.builder("dih.step.retries")
+                .tag("pipeline.name", pipelineName)
+                .tag("step.id", stepId)
+                .description("Counts failed attempts that triggered a retry for a step.")
+                .register(meterRegistry);
     }
 
     @Override
@@ -44,6 +59,7 @@ public class RetryMethodInterceptor implements MethodInterceptor {
 
                 // 3. Продолжение: Логирование, задержка и переход к следующей итерации for-цикла.
                 System.out.println("Attempt " + attempts + " failed. Retrying in " + delay + "ms.");
+                this.retryCounter.increment();
                 Thread.sleep(delay);
             }
         }

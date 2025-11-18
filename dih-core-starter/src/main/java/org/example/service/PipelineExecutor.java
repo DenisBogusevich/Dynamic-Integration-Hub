@@ -1,5 +1,7 @@
 package org.example.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.example.model.PipelineDefinition;
 import org.example.model.StepDefinition;
 import org.example.scope.PipelineContextHolder;
@@ -22,10 +24,12 @@ import java.util.UUID;
 public class PipelineExecutor {
 
     private final ApplicationContext context;
+    private final MeterRegistry meterRegistry;
 
     @Autowired
-    public PipelineExecutor(ApplicationContext context) {
+    public PipelineExecutor(ApplicationContext context, MeterRegistry meterRegistry) {
         this.context = context;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -35,6 +39,7 @@ public class PipelineExecutor {
      * @return The final result produced by the last step.
      */
     public Object executePipeline(PipelineDefinition definition) {
+        Timer.Sample sample = Timer.start(meterRegistry);
         // 1. Управление контекстом (Execution Context Management)
         String executionId = UUID.randomUUID().toString();
         long startTime = Instant.now().toEpochMilli();
@@ -43,6 +48,7 @@ public class PipelineExecutor {
         // Critical: Initialize ThreadLocal context.
         PipelineContextHolder.initializeContext(executionId);
 
+        String status = "success";
         try {
             // Context object to pass to the step's execute method.
             PipelineContext pipelineContext = new PipelineContext(executionId, startTime);
@@ -77,16 +83,24 @@ public class PipelineExecutor {
             return currentData;
 
         } catch (NoSuchBeanDefinitionException e) {
+            status = "missing_step";
             // Обработка, если регистрация пайплайна не была выполнена
             System.err.println("Pipeline execution failed: One or more steps not registered. " + e.getMessage());
             throw new RuntimeException("Execution failure due to missing step registration.", e);
         } catch (Exception e) {
+            status = "failure";
             // Обработка ошибок исполнения (будет доработано в Epic 2: Retry)
             System.err.println("Pipeline execution failed for ID " + executionId + ": " + e.getMessage());
             throw new RuntimeException("Pipeline execution failed.", e);
         } finally {
             // Critical: Cleanup ThreadLocal context to prevent memory leaks and state pollution.
             PipelineContextHolder.cleanup();
+
+            sample.stop(Timer.builder("dih.pipeline.execution") // Имя метрики
+                    .tag("pipeline.name", definition.name())
+                    .tag("execution.status", status)
+                    .description("Measures the total execution time of a pipeline")
+                    .register(meterRegistry));
         }
     }
 }
