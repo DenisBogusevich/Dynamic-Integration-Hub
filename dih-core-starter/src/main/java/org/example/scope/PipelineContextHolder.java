@@ -1,11 +1,15 @@
 package org.example.scope;
 
 import org.example.step.PipelineContext;
+import org.slf4j.MDC;
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class PipelineContextHolder {
+
+    public static final String MDC_EXECUTION_ID = "execution.id";
+    public static final String MDC_PIPELINE_NAME = "pipeline.name";
 
     private static final ThreadLocal<Map<String, Object>> THREAD_BEANS = ThreadLocal.withInitial(HashMap::new);
     private static final ThreadLocal<Map<String, Runnable>> THREAD_DESTRUCTION_CALLBACKS = ThreadLocal.withInitial(HashMap::new);
@@ -22,6 +26,11 @@ public class PipelineContextHolder {
      */
     public static void initializeContext(PipelineContext context) {
         THREAD_CONTEXT.set(context);
+
+        if (context != null) {
+            MDC.put(MDC_EXECUTION_ID, context.executionId());
+            MDC.put(MDC_PIPELINE_NAME, context.pipelineName());
+        }
     }
 
     public static PipelineContext getContext() {
@@ -45,6 +54,8 @@ public class PipelineContextHolder {
 
     public static void removeContext() {
         THREAD_CONTEXT.remove();
+        MDC.remove(MDC_EXECUTION_ID);
+        MDC.remove(MDC_PIPELINE_NAME);
     }
 
     /**
@@ -58,7 +69,10 @@ public class PipelineContextHolder {
         }
         THREAD_BEANS.remove();
         THREAD_DESTRUCTION_CALLBACKS.remove();
-        THREAD_CONTEXT.remove(); // Очищаем контекст
+
+        // removeContext() уже чистит THREAD_CONTEXT и MDC, но для надежности вызовем:
+        removeContext();
+        MDC.clear(); // Гарантированная полная очистка
     }
 
 }

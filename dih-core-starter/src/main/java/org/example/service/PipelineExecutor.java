@@ -10,6 +10,8 @@ import org.example.model.StepDefinition;
 import org.example.scope.PipelineContextHolder;
 import org.example.step.PipelineContext;
 import org.example.step.PipelineStep; // Предполагаем, что DIH-101 завершена
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
@@ -25,6 +27,8 @@ import java.util.UUID;
  */
 @Service
 public class PipelineExecutor {
+
+    private static final Logger log = LoggerFactory.getLogger(PipelineExecutor.class);
 
     private final ApplicationContext context;
     private final MeterRegistry meterRegistry;
@@ -60,8 +64,7 @@ public class PipelineExecutor {
         String stepId = "";
         try {
 
-            System.out.println("Starting Pipeline '" + definition.name() + "' (ID: " + executionId + ")");
-
+            log.info("Starting Pipeline '{}'", definition.name());
             // 2. Итерация и выполнение шагов (Step Iteration and Execution)
             for (StepDefinition stepDef : definition.steps()) {
                 stepId = stepDef.id();
@@ -81,24 +84,26 @@ public class PipelineExecutor {
                 // Безопасное приведение типа для исполнения
                 PipelineStep<Object, Object> step = (PipelineStep<Object, Object>) stepBean;
 
-                System.out.println("Executing step: " + beanName + " with input: " + (currentData != null ? currentData.getClass().getSimpleName() : "null"));
-
+                log.debug("Executing step: {} with input type: {}",
+                        beanName, (currentData != null ? currentData.getClass().getSimpleName() : "null"));
                 // 2.3. Выполнение шага и передача результата
                 currentData = step.execute(currentData, pipelineContext);
             }
 
-            System.out.println("Pipeline '" + definition.name() + "' finished successfully.");
+            log.info("Pipeline '{}' finished successfully.", definition.name());
             return currentData;
 
         } catch (NoSuchBeanDefinitionException e) {
             status = "missing_step";
             // Обертываем ошибку регистрации в PipelineConfigurationException
+            log.error("Configuration error: Step not found.", e);
             throw new PipelineConfigurationException(
                     "Execution failure due to missing step registration: " + e.getMessage(), e); // NEW!
 
         } catch (DihCoreException e) {
             // Ловим наши кастомные ошибки (StepExecutionException, PipelineConcurrencyException, и т.д.)
             status = "failure";
+            log.error("Pipeline execution failed.", e); // MDC покажет ID, стек-трейс покажет причину
             // Просто пробрасываем их дальше, они уже содержат нужную информацию
             throw e; // NEW!
 

@@ -6,12 +6,16 @@ import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
 import org.example.exception.RetryExhaustedException;
 import org.example.model.RetryPolicyDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Interceptor that wraps the execution of a PipelineStep's execute() method
  * with a retry loop based on the configured policy.
  */
 public class RetryMethodInterceptor implements MethodInterceptor {
+
+    private static final Logger log = LoggerFactory.getLogger(RetryMethodInterceptor.class);
 
     // Политика неизменяема и передается при создании прокси
     private final RetryPolicyDefinition retryPolicy;
@@ -54,8 +58,7 @@ public class RetryMethodInterceptor implements MethodInterceptor {
 
                 // 2. Проверка лимита: Если это последняя разрешенная попытка
                 if (attempts == maxAttempts) {
-                    System.err.println("RETRY EXHAUSTED: Max attempts (" + maxAttempts + ") reached. Throwing final exception.");
-                    // КРИТИЧНО: Перебрасываем оригинальное исключение, чтобы его поймал PipelineExecutor.
+                    log.error("RETRY EXHAUSTED: Step '{}' failed after {} attempts.", stepId, maxAttempts, e);
                     throw new RetryExhaustedException(
                             // stepId нам нужен, мы его выделили в конструкторе интерцептора
                             // (он вложен в поле beanName или можно добавить отдельное поле)
@@ -67,7 +70,8 @@ public class RetryMethodInterceptor implements MethodInterceptor {
                 }
 
                 // 3. Продолжение: Логирование, задержка и переход к следующей итерации for-цикла.
-                System.out.println("Attempt " + attempts + " failed. Retrying in " + delay + "ms.");
+                log.warn("Attempt {}/{} failed for step '{}'. Retrying in {}ms. Error: {}",
+                        attempts, maxAttempts, stepId, delay, e.getMessage());
                 this.retryCounter.increment();
                 Thread.sleep(delay);
             }
