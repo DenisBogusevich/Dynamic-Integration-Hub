@@ -1,5 +1,6 @@
 package org.example.integration;
 
+import org.example.annotation.DihStepComponent;
 import org.example.config.DihCoreTestConfig;
 import org.example.exception.PipelineConcurrencyException;
 import org.example.model.PipelineDefinition;
@@ -27,7 +28,11 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest(classes = DihCoreTestConfig.class)
-@Import(TestComponents.class)
+@Import({
+        TestComponents.class,
+        ParallelExecutionTest.SleepingStep.class,
+        ParallelExecutionTest.FailingStep.class
+})
 class ParallelExecutionTest {
 
     private static final String PIPELINE_NAME = "ParallelFlow";
@@ -37,7 +42,7 @@ class ParallelExecutionTest {
     @Autowired
     private PipelineExecutor executor;
 
-    // --- Тестовый компонент, имитирующий задержку ---
+    @DihStepComponent("SleepingStep")
     static class SleepingStep implements PipelineStep<String, String> {
         private long sleepTime;
         private String resultValue;
@@ -57,7 +62,7 @@ class ParallelExecutionTest {
             return resultValue;
         }
     }
-
+    @DihStepComponent("FailingStep")
     static class FailingStep implements PipelineStep<String, String> {
         @Override
         public String execute(String input, PipelineContext context) {
@@ -65,32 +70,6 @@ class ParallelExecutionTest {
             throw new RuntimeException("I am designed to fail!");
         }
     }
-
-    @BeforeEach
-    void setup() {
-        registry.register("SleepingStep", SleepingStep.class);
-        registry.register("ParallelSplitter", ParallelSplitterStep.class);
-        registry.register("FailingStep", FailingStep.class);
-    }
-
-   /* @AfterEach
-    void cleanup() {
-        // Чистим контекст Spring от бинов пайплайна, чтобы тесты не мешали друг другу
-        String[] beans = {
-                PIPELINE_NAME + "_splitter",
-                PIPELINE_NAME + "_branchA",
-                PIPELINE_NAME + "_branchB",
-                "FailTestFlow_splitter",
-                "FailTestFlow_failBranch",
-                "FailTestFlow_okBranch"
-        };
-
-        for (String bean : beans) {
-            if (gcontext.containsBeanDefinition(bean)) {
-                gcontext.removeBeanDefinition(bean);
-            }
-        }
-    }*/
 
     @Test
     @DisplayName("Should execute branches in parallel and aggregate results")

@@ -1,5 +1,6 @@
 package org.example.step;
 
+import org.example.annotation.DihStepComponent;
 import org.example.exception.PipelineConcurrencyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,6 +36,7 @@ import java.util.stream.Collectors;
  * @param <I> The input type passed to all parallel branches.
  * @param <O> The output type (always returns {@code List<Object>}).
  */
+@DihStepComponent("ParallelSplitter")
 public class ParallelSplitterStep<I, O> implements PipelineStep<I, O>, ApplicationContextAware {
 
     private static final Logger log = LoggerFactory.getLogger(ParallelSplitterStep.class);

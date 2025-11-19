@@ -56,7 +56,7 @@ public class PipelineExecutor {
      * @throws DihCoreException If a known domain error occurs.
      * @throws PipelineConfigurationException If the context fails to start.
      */
-    public Object executePipeline(PipelineDefinition definition) {
+    public Object executePipeline(PipelineDefinition definition,Object initialInput) {
         Timer.Sample sample = Timer.start(meterRegistry);
         String executionId = UUID.randomUUID().toString();
         String pipelineName = definition.name();
@@ -87,7 +87,7 @@ public class PipelineExecutor {
             log.info("Pipeline '{}' started. ExecutionID: {}", pipelineName, executionId);
 
             // 3. Execution Loop
-            Object currentData = null;
+            Object currentData = initialInput;
             for (StepDefinition stepDef : definition.steps()) {
                 String beanName = pipelineName + "_" + stepDef.id();
 
@@ -128,5 +128,9 @@ public class PipelineExecutor {
 
             log.debug("Pipeline context destroyed [ID={}]", executionId);
         }
+    }
+
+    public Object executePipeline(PipelineDefinition definition) {
+        return executePipeline(definition, null);
     }
 }

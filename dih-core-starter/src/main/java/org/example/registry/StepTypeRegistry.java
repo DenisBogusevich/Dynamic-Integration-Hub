@@ -60,6 +60,25 @@ public class StepTypeRegistry {
     }
 
     /**
+     * Registers a step type.
+     * Ideally called only by infrastructure components (like StepRegistryBeanPostProcessor).
+     *
+     * @param type  The unique symbolic alias.
+     * @param clazz The implementation class.
+     */
+    public void registerStep(String type, Class<? extends PipelineStep<?, ?>> clazz) {
+        if (stepMap.containsKey(type)) {
+            Class<?> existing = stepMap.get(type);
+            log.warn("Collision detected! Overwriting step type '{}'. Previous: {}, New: {}",
+                    type, existing.getName(), clazz.getName());
+        }
+
+        stepMap.put(type, clazz);
+        log.info("Registered DIH Step: '{}' -> {}", type, clazz.getName());
+    }
+
+
+    /**
      * Resolves the Java class for a given symbolic type.
      *
      * @param type The alias string from the Pipeline Definition.
@@ -73,5 +92,11 @@ public class StepTypeRegistry {
             throw new StepTypeNotFoundException(type);
         }
         return clazz;
+    }
+
+    public Map<String, String> getRegisteredSteps() {
+        Map<String, String> result = new ConcurrentHashMap<>();
+        stepMap.forEach((k, v) -> result.put(k, v.getSimpleName()));
+        return result;
     }
 }
