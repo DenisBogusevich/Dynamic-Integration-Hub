@@ -1,12 +1,6 @@
 package org.example.config;
 
-import org.example.registry.StepTypeRegistry;
-import org.example.scope.PipelineScope;
-import org.example.service.PipelineRegistrar;
-import org.springframework.beans.factory.config.CustomScopeConfigurer;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.support.GenericApplicationContext;
 
 @TestConfiguration
 public class DihCoreTestConfig {

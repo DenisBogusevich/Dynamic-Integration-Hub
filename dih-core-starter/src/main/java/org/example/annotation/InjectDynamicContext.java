@@ -19,7 +19,7 @@ import java.lang.annotation.*;
  * </ul>
  *
  * <h2> Architectural Warning (Scope Safety):</h2>
- * This annotation <b>MUST ONLY</b> be used on beans with {@code @PipelineScope} (or {@code @Scope("prototype")}).
+ * This annotation <b>MUST ONLY</b> be used on beans with  {@code @Scope("prototype")}.
  * <p>
  * If used on a <b>Singleton</b> bean, the context will be injected only once (during application startup
  * or first usage) and effectively "cached" forever. This will lead to <b>Context Leaks</b> where
@@ -27,7 +27,6 @@ import java.lang.annotation.*;
  * </p>
  *
  * @see org.example.bpp.DynamicContextBeanPostProcessor
- * @see org.example.scope.PipelineScope
  */
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)

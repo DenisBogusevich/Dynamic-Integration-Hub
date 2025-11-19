@@ -1,7 +1,6 @@
 package org.example.config;
 
 import org.example.concurrency.DihTaskDecorator;
-import org.example.scope.PipelineScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -11,7 +10,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.support.TaskExecutorAdapter;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executors;
 
@@ -21,18 +19,6 @@ public class DihCoreAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(DihCoreAutoConfiguration.class);
 
-    @Bean
-    @ConditionalOnMissingBean
-    public PipelineScope pipelineScope() {
-        return new PipelineScope();
-    }
-
-    @Bean
-    public CustomScopeConfigurer customScopeConfigurer(PipelineScope pipelineScope) {
-        CustomScopeConfigurer configurer = new CustomScopeConfigurer();
-        configurer.addScope("pipeline", pipelineScope);
-        return configurer;
-    }
 
     @Bean(name = "dihTaskExecutor")
     @ConditionalOnMissingBean(name = "dihTaskExecutor")
