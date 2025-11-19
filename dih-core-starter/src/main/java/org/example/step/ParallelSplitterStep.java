@@ -1,114 +1,152 @@
 package org.example.step;
 
-import org.example.aop.RetryMethodInterceptor;
 import org.example.exception.PipelineConcurrencyException;
-import org.example.model.StepDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.core.ResolvableType;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.core.task.AsyncTaskExecutor;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 
-// Предполагаем, что StepDefinition для этого шага инжектируется через properties
-// или мы получаем контекст, чтобы найти суб-шаги.
-public class ParallelSplitterStep<I, O> implements PipelineStep<I, O> {
+/**
+ * Implements the <b>Scatter-Gather</b> Enterprise Integration Pattern.
+ * <p>
+ * This step acts as a composite node that:
+ * <ol>
+ * <li><b>Splits</b> the execution flow into multiple concurrent branches.</li>
+ * <li><b>Executes</b> defined sub-steps using the configured {@link AsyncTaskExecutor}.</li>
+ * <li><b>Aggregates</b> the results into a single {@code List}.</li>
+ * </ol>
+ *
+ * <h2>Concurrency Model:</h2>
+ * <ul>
+ * <li><b>Fail-Fast:</b> If any single branch fails, the main thread catches the exception immediately
+ * and aborts the entire pipeline execution via {@link PipelineConcurrencyException}.</li>
+ * <li><b>Context Propagation:</b> Relies on {@code DihTaskDecorator} (configured in the Executor)
+ * to propagate {@code ThreadLocal} context (MDC, Execution ID) to worker threads.</li>
+ * </ul>
+ *
+ * @param <I> The input type passed to all parallel branches.
+ * @param <O> The output type (always returns {@code List<Object>}).
+ */
+public class ParallelSplitterStep<I, O> implements PipelineStep<I, O>, ApplicationContextAware {
+
     private static final Logger log = LoggerFactory.getLogger(ParallelSplitterStep.class);
 
-    @Autowired
     private ApplicationContext springContext;
-    @Autowired // Инжектируем наш настроенный Executor
+
+    @Autowired
     private AsyncTaskExecutor dihTaskExecutor;
 
-    // ВАЖНО: Эта логика предполагает, что ParallelSplitterStep
-    // получает список ID шагов или StepDefinition через property injection.
-    // Для этого нужно будет доработать PipelineRegistrar/StepDefinition.
-    public List<String> subStepIds; // Например, инжектируемое свойство
+    /**
+     * The identifiers of the steps to run in parallel.
+     *
+     * @deprecated <b>Architectural Warning:</b> Relying on String IDs forces a runtime lookup (Service Locator pattern).
+     * <br><b>Improvement:</b> Refactor {@code PipelineRegistrar} to wire a {@code List<PipelineStep>} directly into this bean
+     * during the definition phase. This would provide compile-time safety and eager validation.
+     */
+    @Deprecated
+    private List<String> subStepIds;
 
+    /**
+     * Injected via setter from the {@code StepDefinition} properties.
+     */
     public void setSubStepIds(List<String> subStepIds) {
         this.subStepIds = subStepIds;
     }
 
     @Override
-    public O execute(I input, PipelineContext pipelineContext) throws Exception {
+    public void setApplicationContext(ApplicationContext applicationContext) throws BeansException {
+        this.springContext = applicationContext;
+    }
+
+    /**
+     * Executes the parallel orchestration.
+     *
+     * @param input           The payload broadcast to all branches.
+     * @param pipelineContext The current execution metadata.
+     * @return A {@link List} of results from all branches.
+     * @throws PipelineConcurrencyException if any branch fails.
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public O execute(I input, PipelineContext pipelineContext) {
 
         if (subStepIds == null || subStepIds.isEmpty()) {
-            System.out.println("No sub-steps defined for ParallelSplitter. Exiting.");
-            return null; // или возвращаем входной объект
+            log.warn("ParallelSplitter defined without sub-steps. Returning null.");
+            return null;
         }
 
-        // 1. Создание списка задач CompletableFuture
-        String pipelineName = pipelineContext.pipelineName(); // Используем обновленный Context
+        String pipelineName = pipelineContext.pipelineName();
 
-        // 1. Создание списка задач CompletableFuture
+        // 1. Scatter: Submit tasks to the thread pool
         List<CompletableFuture<Object>> futures = subStepIds.stream()
                 .map(stepId -> {
+                    // ARCHITECTURAL NOTE: Naming convention coupling (PipelineName + "_" + StepId)
                     String beanName = pipelineName + "_" + stepId;
 
-                    // 2. Получаем бин из Spring ApplicationContext!
-                    // Используем springContext.getBean(name)
-                    Object subStepBean = springContext.getBean(beanName);
-
-                    // Проверка типа (Defensive Programming)
-                    if (!(subStepBean instanceof PipelineStep)) {
-                        throw new IllegalStateException("Bean '" + beanName + "' is not a PipelineStep.");
-                    }
-
-                    // Безопасное приведение типа для исполнения
-                    PipelineStep<Object, Object> subStep = (PipelineStep<Object, Object>) subStepBean;
-                    // 3. Запускаем асинхронную задачу
-                    return CompletableFuture.supplyAsync(() -> {
-                        try {
-                            // TaskDecorator прокинет контекст. Передаем PipelineContext как аргумент.
-                            return subStep.execute(input, pipelineContext);
-                        } catch (Exception e) {
-                            throw new RuntimeException("Parallel step failed: " + stepId, e);
-                        }
-                    }, dihTaskExecutor);
+                    return CompletableFuture.supplyAsync(() -> executeSubStep(beanName, input, pipelineContext), dihTaskExecutor);
                 })
                 .toList();
 
-        // 4. Ожидание завершения всех задач (DIH-404)
+        // 2. Monitor: Create a barrier waiting for all tasks
         CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
 
-       // Блокируем текущий поток до завершения всех (если кто-то упадет, join() пробросит исключение)
         try {
-            // Блокируем поток. Если кто-то упал, здесь вылетит CompletionException
+            // Block until all are done. If any future completes exceptionally, join() throws CompletionException.
             allOf.join();
 
         } catch (CompletionException e) {
             // --- FAIL FAST LOGIC ---
-            Throwable cause = e.getCause(); // Достаем реальную причину (RuntimeException из потока)
-            log.error("Parallel execution failed. Aborting pipeline.", cause);
+            Throwable realCause = e.getCause();
+            log.error("Parallel execution failed in pipeline '{}'. Aborting.", pipelineName, realCause);
 
-            // Оборачиваем в наше доменное исключение
             throw new PipelineConcurrencyException(
                     "One or more parallel steps failed. See cause for details.",
                     pipelineName,
-                    cause
+                    realCause
             );
         }
 
-         // 5. Агрегация результатов
-          // Собираем результаты из всех CompletableFuture
+        // 3. Gather: Collect results
         List<Object> results = futures.stream()
-                .map(CompletableFuture::join)
+                .map(CompletableFuture::join) // Safe to join here as we passed the barrier
                 .collect(Collectors.toList());
 
-        log.info("ParallelSplitterStep finished. Collected {} results.", results.size());
+        log.debug("ParallelSplitter aggregated {} results.", results.size());
 
-        // 6. Возвращаем агрегированный список
-        // (O) results;
-        // Поскольку PipelineStep имеет обобщенный выход O, а мы знаем, что это List<Object>,
-        // то для совместимости с PipelineExecutor мы вернем этот список.
         return (O) results;
+    }
 
+    /**
+     * Helper to locate and execute a single step bean.
+     *
+     * @deprecated <b>Performance & Design Issue:</b> This method performs a Bean Lookup inside the hot execution path.
+     */
+    @Deprecated
+    private Object executeSubStep(String beanName, I input, PipelineContext context) {
+        // 1. Service Locator Call (Pulling dependencies)
+        Object bean = springContext.getBean(beanName);
+
+        if (!(bean instanceof PipelineStep)) {
+            throw new IllegalStateException("Bean '" + beanName + "' must implement PipelineStep.");
+        }
+
+        @SuppressWarnings("unchecked")
+        PipelineStep<Object, Object> step = (PipelineStep<Object, Object>) bean;
+
+        try {
+            // 2. Execution
+            return step.execute(input, context);
+        } catch (Exception e) {
+            // Wrap checked exceptions to runtime exceptions for CompletableFuture compatibility
+            throw new RuntimeException("Step execution failed: " + beanName, e);
+        }
     }
 }

@@ -32,7 +32,7 @@ public class DihTaskDecorator implements TaskDecorator {
                 // поскольку он вызывает destruction callbacks, которые здесь не нужны
                 // (они должны вызываться PipelineExecutor'ом).
                 // А лучше: делаем точечное удаление контекста.
-                PipelineContextHolder.removeContext();
+                PipelineContextHolder.cleanup();
             }
         };
     }

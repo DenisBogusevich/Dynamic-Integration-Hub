@@ -2,85 +2,73 @@ package org.example.aop;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import org.example.model.RetryPolicyDefinition;
-import org.example.step.PipelineStep; // Используем наш контракт
-
+import org.example.step.PipelineStep;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.BeanFactory;
 import org.springframework.beans.factory.BeanFactoryAware;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * Custom BeanPostProcessor to apply a retry-enabling AOP proxy to PipelineStep
- * beans that have a RetryPolicyDefinition configured in their BeanDefinition metadata.
+ * Infrastructure component that applies Dynamic AOP Proxies to Pipeline Steps.
+ * <p>
+ * This processor inspects the {@link BeanDefinition} of every {@link PipelineStep}.
+ * If a {@link RetryPolicyDefinition} attribute is found (injected by the Registrar),
+ * it wraps the bean in a Spring AOP Proxy with a {@link RetryMethodInterceptor}.
+ * </p>
  */
 @Component
 public class RetryBeanPostProcessor implements BeanPostProcessor, BeanFactoryAware {
 
+    private static final Logger log = LoggerFactory.getLogger(RetryBeanPostProcessor.class);
+
     private ConfigurableListableBeanFactory beanFactory;
     private final MeterRegistry meterRegistry;
 
-    @Autowired
     public RetryBeanPostProcessor(MeterRegistry meterRegistry) {
         this.meterRegistry = meterRegistry;
     }
 
-    /**
-     * Injects the BeanFactory, allowing access to low-level BeanDefinitions and attributes.
-     */
     @Override
     public void setBeanFactory(BeanFactory beanFactory) throws BeansException {
-        // Сохраняем расширенный интерфейс фабрики для доступа к BeanDefinition
-        if (beanFactory instanceof ConfigurableListableBeanFactory) {
-            this.beanFactory = (ConfigurableListableBeanFactory) beanFactory;
+        if (beanFactory instanceof ConfigurableListableBeanFactory clbf) {
+            this.beanFactory = clbf;
         }
     }
 
-    /**
-     * Intercepts bean creation after initialization to apply AOP proxying.
-     * This method is called once for every bean instance after it has been created and populated.
-     */
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-
-        // 1. Фильтруем бины, которые нас не интересуют
+        // 1. Filter: We only care about PipelineSteps
         if (!(bean instanceof PipelineStep)) {
             return bean;
         }
 
-        // 2. Получаем политику из метаданных BeanDefinition
+        // 2. Metadata Lookup: Check if this specific step definition has a retry policy
         RetryPolicyDefinition policy = getRetryPolicyFromDefinition(beanName);
 
-        // 3. Если политика не настроена или повторы не нужны, пропускаем
         if (policy == null || policy.maxAttempts() <= 1) {
-            // Также проверяем @RetryableStep, если вы решите использовать его как триггер
-            // в дополнение к политике. Для чистоты: policy!=null — основной триггер.
             return bean;
         }
 
-        // 4. Создание AOP Прокси
+        // 3. Proxy Creation
         ProxyFactory proxyFactory = new ProxyFactory(bean);
-
-        // Форсируем использование CGLIB для проксирования класса,
-        // а не только интерфейсов. Это безопаснее для бинов в кастомном скоупе.
-        proxyFactory.setProxyTargetClass(true);
-
-        // 5. Добавление нашего интерцептора с инжектированной политикой
-        // Мы передаем DTO RetryPolicyDefinition в конструктор интерцептора
+        proxyFactory.setProxyTargetClass(true); // Enforce CGLIB (Class-based proxy)
         proxyFactory.addAdvice(new RetryMethodInterceptor(policy, meterRegistry, beanName));
-        System.out.println("Applied Retry Proxy to bean: " + beanName +
-                " (Max Attempts: " + policy.maxAttempts() + ", Delay: " + policy.delay() + "ms)");
 
-        // 6. Возвращаем прокси
+        // Use Logger instead of System.out
+        log.info("Applied Retry AOP Proxy to step '{}'. Policy: [Max={}, Delay={}ms]",
+                beanName, policy.maxAttempts(), policy.delay());
+
         return proxyFactory.getProxy();
     }
 
     /**
-     * Helper method to retrieve the custom RetryPolicyDefinition from the BeanDefinition metadata.
+     * Safely retrieves the retry policy from the bean definition attributes.
      */
     private RetryPolicyDefinition getRetryPolicyFromDefinition(String beanName) {
         if (beanFactory == null || !beanFactory.containsBeanDefinition(beanName)) {
@@ -95,8 +83,8 @@ public class RetryBeanPostProcessor implements BeanPostProcessor, BeanFactoryAwa
                 return (RetryPolicyDefinition) policyAttribute;
             }
         } catch (Exception e) {
-            // В случае ошибки получения BeanDefinition (например, это скоуп-прокси)
-            System.err.println("Could not retrieve BeanDefinition for AOP processing: " + beanName);
+            // Use Logger instead of System.err
+            log.warn("Failed to retrieve BeanDefinition for '{}' during AOP processing. Skipping retry configuration.", beanName);
         }
 
         return null;

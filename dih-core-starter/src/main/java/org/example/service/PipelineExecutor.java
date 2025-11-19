@@ -6,15 +6,13 @@ import org.example.aop.RetryBeanPostProcessor;
 import org.example.bpp.DynamicContextBeanPostProcessor;
 import org.example.exception.DihCoreException;
 import org.example.exception.PipelineConfigurationException;
-import org.example.exception.StepExecutionException;
 import org.example.model.PipelineDefinition;
 import org.example.model.StepDefinition;
 import org.example.scope.PipelineContextHolder;
 import org.example.step.PipelineContext;
-import org.example.step.PipelineStep; // Предполагаем, что DIH-101 завершена
+import org.example.step.PipelineStep;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -24,9 +22,13 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * The core execution orchestrator for dynamic pipelines.
- * Manages the lifecycle of a single pipeline run, ensuring context isolation
- * and sequential execution of registered steps.
+ * Orchestrator using the <b>Ephemeral Child Context Pattern</b>.
+ * <p>
+ * For every pipeline execution, this executor spins up a dedicated, short-lived
+ * Spring ApplicationContext. This ensures perfect isolation of stateful components
+ * and enables standard Spring features (AOP, Singletons) to behave dynamically
+ * per request.
+ * </p>
  */
 @Service
 public class PipelineExecutor {
@@ -47,147 +49,84 @@ public class PipelineExecutor {
     }
 
     /**
-     * Executes the pipeline defined by the configuration.
+     * Executes the pipeline in an isolated child context.
      *
-     * @param definition The blueprint of the pipeline to run.
-     * @return The final result produced by the last step.
+     * @param definition The pipeline blueprint.
+     * @return The final result from the last step.
+     * @throws DihCoreException If a known domain error occurs.
+     * @throws PipelineConfigurationException If the context fails to start.
      */
     public Object executePipeline(PipelineDefinition definition) {
         Timer.Sample sample = Timer.start(meterRegistry);
         String executionId = UUID.randomUUID().toString();
+        String pipelineName = definition.name();
 
-        PipelineContext pipelineContext = new PipelineContext(executionId, Instant.now().toEpochMilli(), definition.name());
+        // 1. Initialize ThreadLocal Context (for MDC logs)
+        PipelineContext pipelineContext = new PipelineContext(executionId, Instant.now().toEpochMilli(), pipelineName);
         PipelineContextHolder.initializeContext(pipelineContext);
 
+        // 2. Create Ephemeral Child Context
+        // WARN: Heavyweight operation. This is the main bottleneck of this architecture.
         try (var childContext = new AnnotationConfigApplicationContext()) {
 
-            // 2.1 Настраиваем иерархию
+            // 2.1 Context Hierarchy
             childContext.setParent(parentContext);
             childContext.setDisplayName("Child-Pipeline-" + executionId);
 
-            // 2.2 Регистрируем Инфраструктуру ВНУТРИ ребенка
-            // Чтобы @RetryableStep и @InjectDynamicContext работали для бинов этого пайплайна
+            // 2.2 Register Infrastructure Beans *specifically* for this child context
+            // This ensures BPPs only affect beans in this isolation bubble.
             childContext.registerBean(RetryBeanPostProcessor.class);
             childContext.registerBean(DynamicContextBeanPostProcessor.class);
 
-            // 2.3 Регистрируем шаги пайплайна через Registrar
-            // Передаем childContext как реестр
+            // 2.3 Register Pipeline Steps via Registrar
             registrar.registerPipeline(definition, childContext);
 
-            // 2.4 Поднимаем контекст (Refresh) — в этот момент создаются синглтоны и применяются прокси
+            // 2.4 Ignite the Context (Dependency Injection, AOP Proxies created here)
             childContext.refresh();
 
-            log.info("Pipeline '{}' started. Child context created: {}", definition.name(), childContext.getId());
+            log.info("Pipeline '{}' started. ExecutionID: {}", pipelineName, executionId);
 
-            // 3. Выполнение (Execution)
+            // 3. Execution Loop
             Object currentData = null;
             for (StepDefinition stepDef : definition.steps()) {
-                String beanName = definition.name() + "_" + stepDef.id();
+                String beanName = pipelineName + "_" + stepDef.id();
 
-                // Берем бин из CHILD context
+                // Retrieve the bean from the CHILD context
                 Object stepBean = childContext.getBean(beanName);
 
                 if (!(stepBean instanceof PipelineStep)) {
-                    throw new IllegalStateException("Bean is not a PipelineStep: " + beanName);
+                    throw new IllegalStateException("Bean '" + beanName + "' is not a PipelineStep.");
                 }
 
+                @SuppressWarnings("unchecked")
                 PipelineStep<Object, Object> step = (PipelineStep<Object, Object>) stepBean;
+
+                // Execute
                 currentData = step.execute(currentData, pipelineContext);
             }
 
             return currentData;
 
         } catch (DihCoreException e) {
-            // [ИСПРАВЛЕНИЕ]
-            // Если ошибка уже "наша" (Concurrency, StepExecution, RetryExhausted),
-            // мы не должны её прятать. Пробрасываем выше.
-            log.error("Pipeline execution failed with domain error: {}", e.getMessage());
+            // Domain errors (Concurrency, RetryExhausted) should propagate up
+            log.error("Pipeline execution failed [ID={}]: {}", executionId, e.getMessage());
             throw e;
 
         } catch (Exception e) {
-            // А вот все остальные (Spring Beans exceptions, NullPointer, etc)
-            // оборачиваем в ConfigurationException, так как это скорее всего инфраструктурный сбой.
-            log.error("Pipeline execution failed with unexpected error", e);
-            throw new PipelineConfigurationException("Execution failed: " + e.getMessage(), e);
+            // Infrastructure errors (Context startup, DI failure)
+            log.error("Infrastructure failure in pipeline [ID={}]", executionId, e);
+            throw new PipelineConfigurationException("Fatal execution error: " + e.getMessage(), e);
 
         } finally {
-            // Очистка ThreadLocal (MDC)
+            // 4. Cleanup
             PipelineContextHolder.cleanup();
 
             sample.stop(Timer.builder("dih.pipeline.execution")
-                    .tag("pipeline.name", definition.name())
+                    .tag("pipeline.name", pipelineName)
+                    .description("Total execution time including context startup")
                     .register(meterRegistry));
 
-            // childContext.close() вызовется автоматически благодаря try-with-resources
-            log.debug("Child context closed. All temporary beans destroyed.");
+            log.debug("Pipeline context destroyed [ID={}]", executionId);
         }
-
-
-        /*String status = "success";
-
-        String stepId = "";
-        try {
-
-            log.info("Starting Pipeline '{}'", definition.name());
-            // 2. Итерация и выполнение шагов (Step Iteration and Execution)
-            for (StepDefinition stepDef : definition.steps()) {
-                stepId = stepDef.id();
-                String beanName = definition.name() + "_" + stepDef.id();
-
-                // 2.1. Получение бина из Spring Context
-                // Поскольку мы не знаем конкретные Generics I, O, мы используем Object
-                // и приводим к общему контракту PipelineStep.
-                Object stepBean = context.getBean(beanName);
-
-                // 2.2. Проверка типа (Defensive Programming)
-                if (!(stepBean instanceof PipelineStep)) {
-                    throw new IllegalStateException("Bean '" + beanName +
-                            "' is not a PipelineStep. Check StepTypeRegistry registration.");
-                }
-
-                // Безопасное приведение типа для исполнения
-                PipelineStep<Object, Object> step = (PipelineStep<Object, Object>) stepBean;
-
-                log.debug("Executing step: {} with input type: {}",
-                        beanName, (currentData != null ? currentData.getClass().getSimpleName() : "null"));
-                // 2.3. Выполнение шага и передача результата
-                currentData = step.execute(currentData, pipelineContext);
-            }
-
-            log.info("Pipeline '{}' finished successfully.", definition.name());
-            return currentData;
-
-        } catch (NoSuchBeanDefinitionException e) {
-            status = "missing_step";
-            // Обертываем ошибку регистрации в PipelineConfigurationException
-            log.error("Configuration error: Step not found.", e);
-            throw new PipelineConfigurationException(
-                    "Execution failure due to missing step registration: " + e.getMessage(), e); // NEW!
-
-        } catch (DihCoreException e) {
-            // Ловим наши кастомные ошибки (StepExecutionException, PipelineConcurrencyException, и т.д.)
-            status = "failure";
-            log.error("Pipeline execution failed.", e); // MDC покажет ID, стек-трейс покажет причину
-            // Просто пробрасываем их дальше, они уже содержат нужную информацию
-            throw e; // NEW!
-
-        } catch (Exception e) {
-            status = "failure";
-            // Ловим любые другие (unchecked или checked) исключения от шага и оборачиваем их.
-
-            // Оборачиваем в StepExecutionException для унификации обработки ошибок исполнения
-            throw new StepExecutionException(
-                    "Uncaught exception during step execution.", stepId, e); // NEW!
-
-        }finally {
-            // Critical: Cleanup ThreadLocal context to prevent memory leaks and state pollution.
-            PipelineContextHolder.cleanup();
-
-            sample.stop(Timer.builder("dih.pipeline.execution") // Имя метрики
-                    .tag("pipeline.name", definition.name())
-                    .tag("execution.status", status)
-                    .description("Measures the total execution time of a pipeline")
-                    .register(meterRegistry));
-        }*/
     }
 }

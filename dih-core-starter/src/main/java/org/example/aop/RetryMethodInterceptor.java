@@ -9,28 +9,27 @@ import org.example.model.RetryPolicyDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Method;
+
 /**
- * Interceptor that wraps the execution of a PipelineStep's execute() method
- * with a retry loop based on the configured policy.
+ * AOP Advice that implements the Retry Logic.
+ * <p>
+ * Wraps the execution of the {@code execute} method. If an exception occurs,
+ * it pauses the thread and retries until the maximum attempts are reached.
+ * </p>
  */
 public class RetryMethodInterceptor implements MethodInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(RetryMethodInterceptor.class);
 
-    // Политика неизменяема и передается при создании прокси
     private final RetryPolicyDefinition retryPolicy;
     private final Counter retryCounter;
     private final String stepId;
 
-    /**
-     * Constructs the interceptor with the specific retry policy for this step's bean.
-     * @param retryPolicy The fault tolerance configuration (maxAttempts, delay).
-     * @param meterRegistry The Micrometer registry instance.
-     * @param beanName The unique bean name (e.g., PipelineName_StepId) for tagging.
-     */
     public RetryMethodInterceptor(RetryPolicyDefinition retryPolicy, MeterRegistry meterRegistry, String beanName) {
         this.retryPolicy = retryPolicy;
 
+        // Extract clean ID from "PipelineName_StepId"
         String[] parts = beanName.split("_", 2);
         String pipelineName = parts.length > 0 ? parts[0] : "unknown";
         this.stepId = parts.length > 1 ? parts[1] : beanName;
@@ -38,46 +37,60 @@ public class RetryMethodInterceptor implements MethodInterceptor {
         this.retryCounter = Counter.builder("dih.step.retries")
                 .tag("pipeline.name", pipelineName)
                 .tag("step.id", stepId)
-                .description("Counts failed attempts that triggered a retry for a step.")
+                .description("Counts failed attempts that triggered a retry.")
                 .register(meterRegistry);
     }
 
     @Override
     public Object invoke(MethodInvocation invocation) throws Throwable {
+        // 1. Filtering: Only intercept the 'execute' method
+        // This prevents retrying hashCode(), toString(), or setters.
+        Method method = invocation.getMethod();
+        if (!"execute".equals(method.getName())) {
+            return invocation.proceed();
+        }
+
         int maxAttempts = retryPolicy.maxAttempts();
         long delay = retryPolicy.delay();
 
-        // Loop runs from 1 to maxAttempts. This controls the total number of calls
-        // to invocation.proceed().
-        for (int attempts = 1; attempts <= maxAttempts; attempts++) {
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                // 1. Успешный вызов: Немедленный выход из метода и цикла.
                 return invocation.proceed();
-
             } catch (Exception e) {
-
-                // 2. Проверка лимита: Если это последняя разрешенная попытка
-                if (attempts == maxAttempts) {
-                    log.error("RETRY EXHAUSTED: Step '{}' failed after {} attempts.", stepId, maxAttempts, e);
-                    throw new RetryExhaustedException(
-                            // stepId нам нужен, мы его выделили в конструкторе интерцептора
-                            // (он вложен в поле beanName или можно добавить отдельное поле)
-                            // Предположим, что stepId доступен в этом классе.
-                            stepId,
-                            maxAttempts,
-                            e // Передаем оригинальное исключение как причину
-                    );
+                if (attempt == maxAttempts) {
+                    log.error("RETRY EXHAUSTED: Step '{}' failed after {} attempts.", stepId, maxAttempts);
+                    throw new RetryExhaustedException(stepId, maxAttempts, e);
                 }
 
-                // 3. Продолжение: Логирование, задержка и переход к следующей итерации for-цикла.
                 log.warn("Attempt {}/{} failed for step '{}'. Retrying in {}ms. Error: {}",
-                        attempts, maxAttempts, stepId, delay, e.getMessage());
+                        attempt, maxAttempts, stepId, delay, e.getMessage());
+
                 this.retryCounter.increment();
-                Thread.sleep(delay);
+
+                // ARCHITECTURAL WARNING: Blocking I/O
+                performWait(delay);
             }
         }
+        throw new IllegalStateException("Unreachable code in RetryMethodInterceptor");
+    }
 
-        // Этот код должен быть недостижим благодаря for-циклу и throw e.
-        throw new IllegalStateException("Critical error: Retry loop logic failed to terminate properly.");
+    /**
+     * Pauses the current thread.
+     *
+     * @deprecated <b>Performance Bottleneck:</b> Calling {@code Thread.sleep} blocks the actual
+     * worker thread from the pool. In high-concurrency scenarios (like your {@code ParallelSplitterStep}),
+     * this leads to Thread Starvation.
+     * <br><b>Fix:</b> Switch to a non-blocking retry mechanism (e.g., Spring Retry with BackOffPolicy
+     * or Reactor's {@code .retryWhen()}) if moving to a reactive stack. For synchronous flows,
+     * this is acceptable ONLY if pool size is sufficient.
+     */
+    @Deprecated
+    private void performWait(long delay) {
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Retry interrupted", e);
+        }
     }
 }

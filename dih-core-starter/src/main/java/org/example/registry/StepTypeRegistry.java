@@ -2,51 +2,74 @@ package org.example.registry;
 
 import org.example.exception.StepTypeNotFoundException;
 import org.example.step.PipelineStep;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Central registry that maps symbolic step type aliases (from JSON) to actual Java classes.
- * This acts as a security allow-list and decouples configuration from implementation.
+ * Core Registry: Maps symbolic alias strings (from JSON) to concrete Java implementation classes.
+ * <p>
+ * This registry acts as a <b>Security Allow-list</b>, ensuring that only explicitly registered
+ * classes can be instantiated by the pipeline engine.
+ * </p>
  */
 @Component
 public class StepTypeRegistry {
 
-    private final Map<String, Class<?>> stepMap = new ConcurrentHashMap<>();
+    private static final Logger log = LoggerFactory.getLogger(StepTypeRegistry.class);
+
+    // Using Wildcard with upper bound to enforce type safety at the storage level
+    private final Map<String, Class<? extends PipelineStep<?, ?>>> stepMap = new ConcurrentHashMap<>();
 
     /**
-     * Registers a new step type.
+     * Manually registers a new step type.
      *
-     * @param type  The alias used in JSON configuration (e.g., "JdbcSource").
-     * @param clazz The actual Java class that implements this step.
+     * @param type  The unique symbolic alias (e.g., "JdbcSource").
+     * @param clazz The implementation class.
+     * @deprecated <b>Architectural Debt:</b> Manual registration is error-prone and boilerplate-heavy.
+     * <br><b>Recommendation:</b> Implement an annotation-based auto-discovery mechanism (e.g., {@code @DihStep("alias")})
+     * using Spring's {@code ClassPathScanningCandidateComponentProvider} or a {@code BeanPostProcessor} to automatically
+     * populate this registry on startup.
      */
+    @Deprecated(forRemoval = false) // Keeping it for testing/overrides, but discouraging standard use.
     public void register(String type, Class<?> clazz) {
-
-        if(!PipelineStep.class.isAssignableFrom(clazz)) {
+        // 1. Safety Check: Ensure the class actually implements the required interface
+        if (!PipelineStep.class.isAssignableFrom(clazz)) {
             throw new IllegalArgumentException(
-                    "Class '" + clazz.getName() + "' must implement the PipelineStep interface."
+                    "Security Error: Class '" + clazz.getName() + "' does not implement the PipelineStep interface."
             );
         }
 
-        // Можно добавить валидацию, например, проверять, что clazz реализует интерфейс PipelineStep
+        // 2. Overwrite Warning: Prevent silent shadowing of existing steps
         if (stepMap.containsKey(type)) {
-            // Логируем предупреждение о перезаписи, если нужно
+            Class<?> existing = stepMap.get(type);
+            log.warn("Collision detected! Overwriting step type '{}'. Previous: {}, New: {}",
+                    type, existing.getName(), clazz.getName());
         }
-        stepMap.put(type, clazz);
+
+        // 3. Safe Cast and Store
+        // We checked isAssignableFrom above, so this unchecked cast is safe.
+        @SuppressWarnings("unchecked")
+        Class<? extends PipelineStep<?, ?>> castedClass = (Class<? extends PipelineStep<?, ?>>) clazz;
+        stepMap.put(type, castedClass);
+
+        log.debug("Registered step type '{}' -> {}", type, clazz.getSimpleName());
     }
 
     /**
-     * Resolves a Java class by its symbolic type alias.
+     * Resolves the Java class for a given symbolic type.
      *
-     * @param type The alias from JSON.
-     * @return The corresponding Java class.
-     * @throws StepTypeNotFoundException if the alias is not registered.
+     * @param type The alias string from the Pipeline Definition.
+     * @return The concrete Java class.
+     * @throws StepTypeNotFoundException if the type is unknown (Fail-Fast).
      */
-    public Class<?> getStepClass(String type) {
-        Class<?> clazz = stepMap.get(type);
+    public Class<? extends PipelineStep<?, ?>> getStepClass(String type) {
+        var clazz = stepMap.get(type);
         if (clazz == null) {
+            log.error("Registry lookup failed for type: '{}'. Available types: {}", type, stepMap.keySet());
             throw new StepTypeNotFoundException(type);
         }
         return clazz;

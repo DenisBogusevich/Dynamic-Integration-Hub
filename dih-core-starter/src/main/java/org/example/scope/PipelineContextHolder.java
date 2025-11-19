@@ -3,76 +3,77 @@ package org.example.scope;
 import org.example.step.PipelineContext;
 import org.slf4j.MDC;
 
-import java.util.HashMap;
-import java.util.Map;
-
+/**
+ * Static holder for the thread-bound {@link PipelineContext}.
+ * <p>
+ * <b>Responsibilities:</b>
+ * <ul>
+ * <li>Stores the current execution metadata (ID, start time) in {@link ThreadLocal}.</li>
+ * <li>Synchronizes this metadata with SLF4J's {@link MDC} for structured logging.</li>
+ * </ul>
+ * <p>
+ * <b>Note:</b> This class no longer manages Beans. Bean lifecycle is now managed
+ * by the Ephemeral Child ApplicationContext.
+ * </p>
+ */
 public class PipelineContextHolder {
 
     public static final String MDC_EXECUTION_ID = "execution.id";
     public static final String MDC_PIPELINE_NAME = "pipeline.name";
 
-    private static final ThreadLocal<Map<String, Object>> THREAD_BEANS = ThreadLocal.withInitial(HashMap::new);
-    private static final ThreadLocal<Map<String, Runnable>> THREAD_DESTRUCTION_CALLBACKS = ThreadLocal.withInitial(HashMap::new);
+    // We only store Metadata now, not Beans.
     private static final ThreadLocal<PipelineContext> THREAD_CONTEXT = new ThreadLocal<>();
+
     /**
-     * Инициализирует контекст, устанавливая уникальный ID исполнения.
-     * Обязателен при старте пайплайна, чтобы отличать его от других.
+     * Binds the context to the current thread and updates MDC.
      *
-     * @param executionId Уникальный ID текущего исполнения (например, UUID).
-     */
-    /**
-     * Инициализирует контекст.
-     * @param context Объект контекста текущего исполнения.
+     * @param context The metadata for the current pipeline run.
      */
     public static void initializeContext(PipelineContext context) {
+        if (context == null) {
+            cleanup();
+            return;
+        }
+
         THREAD_CONTEXT.set(context);
 
-        if (context != null) {
-            MDC.put(MDC_EXECUTION_ID, context.executionId());
-            MDC.put(MDC_PIPELINE_NAME, context.pipelineName());
-        }
+        // Populate Logging Context
+        MDC.put(MDC_EXECUTION_ID, context.executionId());
+        MDC.put(MDC_PIPELINE_NAME, context.pipelineName());
     }
 
+    /**
+     * Retrieves the current thread's pipeline context.
+     *
+     * @return The context, or {@code null} if not set (e.g., outside a pipeline).
+     */
     public static PipelineContext getContext() {
         return THREAD_CONTEXT.get();
     }
 
-    public static Map<String, Object> getCurrentBeans(){
-        return THREAD_BEANS.get();
-    }
     /**
-     * Возвращает карту коллбэков уничтожения, привязанную к текущему потоку.
+     * Helper to retrieve just the Execution ID.
+     *
+     * @return Execution ID or null.
      */
-    public static Map<String, Runnable> getCurrentCallbacks() {
-        return THREAD_DESTRUCTION_CALLBACKS.get();
-    }
-
     public static String getContextId() {
         PipelineContext ctx = THREAD_CONTEXT.get();
         return ctx != null ? ctx.executionId() : null;
     }
 
-    public static void removeContext() {
+    /**
+     * Clears the context from the current thread.
+     * MUST be called in a `finally` block to prevent ThreadLocal leaks (memory leaks).
+     */
+    public static void cleanup() {
+        // 1. Clear our custom context
         THREAD_CONTEXT.remove();
+
+        // 2. Clear logging context to prevent confusing logs in reused threads
         MDC.remove(MDC_EXECUTION_ID);
         MDC.remove(MDC_PIPELINE_NAME);
     }
-
-    /**
-     * Очищает контекст, вызывая все Destruction Callbacks и удаляя ссылки.
-     * ДОЛЖЕН вызываться в блоке finally после завершения работы пайплайна.
-     */
-    public static void cleanup() {
-        Map<String, Runnable> callbacks = THREAD_DESTRUCTION_CALLBACKS.get();
-        if (callbacks != null) {
-            callbacks.values().forEach(Runnable::run);
-        }
-        THREAD_BEANS.remove();
-        THREAD_DESTRUCTION_CALLBACKS.remove();
-
-        // removeContext() уже чистит THREAD_CONTEXT и MDC, но для надежности вызовем:
-        removeContext();
-        MDC.clear(); // Гарантированная полная очистка
-    }
-
+    // Deprecated methods removed for clarity (getCurrentBeans, getCurrentCallbacks)
 }
+
+
