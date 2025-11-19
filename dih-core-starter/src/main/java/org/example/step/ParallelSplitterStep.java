@@ -1,6 +1,7 @@
 package org.example.step;
 
 import org.example.aop.RetryMethodInterceptor;
+import org.example.exception.PipelineConcurrencyException;
 import org.example.model.StepDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 
 // Предполагаем, что StepDefinition для этого шага инжектируется через properties
@@ -76,7 +78,22 @@ public class ParallelSplitterStep<I, O> implements PipelineStep<I, O> {
         CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
 
        // Блокируем текущий поток до завершения всех (если кто-то упадет, join() пробросит исключение)
-        allOf.join();
+        try {
+            // Блокируем поток. Если кто-то упал, здесь вылетит CompletionException
+            allOf.join();
+
+        } catch (CompletionException e) {
+            // --- FAIL FAST LOGIC ---
+            Throwable cause = e.getCause(); // Достаем реальную причину (RuntimeException из потока)
+            log.error("Parallel execution failed. Aborting pipeline.", cause);
+
+            // Оборачиваем в наше доменное исключение
+            throw new PipelineConcurrencyException(
+                    "One or more parallel steps failed. See cause for details.",
+                    pipelineName,
+                    cause
+            );
+        }
 
          // 5. Агрегация результатов
           // Собираем результаты из всех CompletableFuture
