@@ -1,6 +1,9 @@
 package org.example.step;
 
+import org.example.aop.RetryMethodInterceptor;
 import org.example.model.StepDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.ParameterizedTypeReference;
@@ -14,6 +17,7 @@ import java.util.stream.Collectors;
 // Предполагаем, что StepDefinition для этого шага инжектируется через properties
 // или мы получаем контекст, чтобы найти суб-шаги.
 public class ParallelSplitterStep<I, O> implements PipelineStep<I, O> {
+    private static final Logger log = LoggerFactory.getLogger(ParallelSplitterStep.class);
 
     @Autowired
     private ApplicationContext springContext;
@@ -71,10 +75,22 @@ public class ParallelSplitterStep<I, O> implements PipelineStep<I, O> {
         // 4. Ожидание завершения всех задач (DIH-404)
         CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
 
-        allOf.get(); // Блокировка
+       // Блокируем текущий поток до завершения всех (если кто-то упадет, join() пробросит исключение)
+        allOf.join();
 
-        // 5. Агрегация результатов (TODO: Реализовать логику агрегации, сейчас просто null)
-        return null;
+         // 5. Агрегация результатов
+          // Собираем результаты из всех CompletableFuture
+        List<Object> results = futures.stream()
+                .map(CompletableFuture::join)
+                .collect(Collectors.toList());
+
+        log.info("ParallelSplitterStep finished. Collected {} results.", results.size());
+
+        // 6. Возвращаем агрегированный список
+        // (O) results;
+        // Поскольку PipelineStep имеет обобщенный выход O, а мы знаем, что это List<Object>,
+        // то для совместимости с PipelineExecutor мы вернем этот список.
+        return (O) results;
 
     }
 }
