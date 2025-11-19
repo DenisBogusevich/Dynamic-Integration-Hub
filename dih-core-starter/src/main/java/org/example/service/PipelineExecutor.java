@@ -2,6 +2,9 @@ package org.example.service;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import org.example.exception.DihCoreException;
+import org.example.exception.PipelineConfigurationException;
+import org.example.exception.StepExecutionException;
 import org.example.model.PipelineDefinition;
 import org.example.model.StepDefinition;
 import org.example.scope.PipelineContextHolder;
@@ -53,12 +56,15 @@ public class PipelineExecutor {
         PipelineContextHolder.initializeContext(pipelineContext);
 
         String status = "success";
+
+        String stepId = "";
         try {
 
             System.out.println("Starting Pipeline '" + definition.name() + "' (ID: " + executionId + ")");
 
             // 2. Итерация и выполнение шагов (Step Iteration and Execution)
             for (StepDefinition stepDef : definition.steps()) {
+                stepId = stepDef.id();
                 String beanName = definition.name() + "_" + stepDef.id();
 
                 // 2.1. Получение бина из Spring Context
@@ -86,15 +92,25 @@ public class PipelineExecutor {
 
         } catch (NoSuchBeanDefinitionException e) {
             status = "missing_step";
-            // Обработка, если регистрация пайплайна не была выполнена
-            System.err.println("Pipeline execution failed: One or more steps not registered. " + e.getMessage());
-            throw new RuntimeException("Execution failure due to missing step registration.", e);
+            // Обертываем ошибку регистрации в PipelineConfigurationException
+            throw new PipelineConfigurationException(
+                    "Execution failure due to missing step registration: " + e.getMessage(), e); // NEW!
+
+        } catch (DihCoreException e) {
+            // Ловим наши кастомные ошибки (StepExecutionException, PipelineConcurrencyException, и т.д.)
+            status = "failure";
+            // Просто пробрасываем их дальше, они уже содержат нужную информацию
+            throw e; // NEW!
+
         } catch (Exception e) {
             status = "failure";
-            // Обработка ошибок исполнения (будет доработано в Epic 2: Retry)
-            System.err.println("Pipeline execution failed for ID " + executionId + ": " + e.getMessage());
-            throw new RuntimeException("Pipeline execution failed.", e);
-        } finally {
+            // Ловим любые другие (unchecked или checked) исключения от шага и оборачиваем их.
+
+            // Оборачиваем в StepExecutionException для унификации обработки ошибок исполнения
+            throw new StepExecutionException(
+                    "Uncaught exception during step execution.", stepId, e); // NEW!
+
+        }finally {
             // Critical: Cleanup ThreadLocal context to prevent memory leaks and state pollution.
             PipelineContextHolder.cleanup();
 
