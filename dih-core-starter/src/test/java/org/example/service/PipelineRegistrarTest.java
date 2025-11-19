@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.CustomScopeConfigurer;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.ApplicationContext;
@@ -36,6 +37,9 @@ class PipelineRegistrarTest {
 
     @Autowired
     private ApplicationContext applicationContext;
+
+    @Autowired
+    private BeanDefinitionRegistry beanDefinitionRegistry;
 
     // 1. Тестовый класс-пустышка (Dummy Step)
     // Он имитирует реальный компонент пайплайна
@@ -76,7 +80,7 @@ class PipelineRegistrarTest {
                 null
         );
 
-        pipelineRegistrar.registerStep(pipelineName, stepDef);
+        pipelineRegistrar.registerStep(pipelineName, stepDef,beanDefinitionRegistry);
 
         String expectedBeanName = pipelineName + "_" + stepId;
 

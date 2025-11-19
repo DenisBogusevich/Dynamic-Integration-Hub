@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.support.GenericApplicationContext;
@@ -32,13 +33,9 @@ class ParallelExecutionTest {
     private static final String PIPELINE_NAME = "ParallelFlow";
 
     @Autowired
-    private PipelineRegistrar registrar;
-    @Autowired
     private StepTypeRegistry registry;
     @Autowired
     private PipelineExecutor executor;
-    @Autowired
-    private GenericApplicationContext gcontext;
 
     // --- Тестовый компонент, имитирующий задержку ---
     static class SleepingStep implements PipelineStep<String, String> {
@@ -76,7 +73,7 @@ class ParallelExecutionTest {
         registry.register("FailingStep", FailingStep.class);
     }
 
-    @AfterEach
+   /* @AfterEach
     void cleanup() {
         // Чистим контекст Spring от бинов пайплайна, чтобы тесты не мешали друг другу
         String[] beans = {
@@ -93,7 +90,7 @@ class ParallelExecutionTest {
                 gcontext.removeBeanDefinition(bean);
             }
         }
-    }
+    }*/
 
     @Test
     @DisplayName("Should execute branches in parallel and aggregate results")
@@ -128,7 +125,7 @@ class ParallelExecutionTest {
         );
 
         // 3. Регистрация
-        registrar.registerPipeline(definition);
+        //registrar.registerPipeline(definition,beanDefinitionRegistry);
 
         // 4. Исполнение
         long start = System.currentTimeMillis();
@@ -180,7 +177,7 @@ class ParallelExecutionTest {
                 "FailTestFlow", "pipeline", "1.0", List.of(splitter)
         );
 
-        registrar.registerPipeline(definition);
+        //registrar.registerPipeline(definition,beanDefinitionRegistry);
 
         // 3. Ожидаем наше кастомное исключение
         Exception exception = assertThrows(PipelineConcurrencyException.class, () -> {

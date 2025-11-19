@@ -10,6 +10,7 @@ import org.example.service.PipelineRegistrar;
 import org.example.step.PipelineStep; // Предполагается, что DIH-101 завершен
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.support.GenericApplicationContext;
@@ -36,6 +37,9 @@ class PipelineExecutionTest {
 
     @Autowired
     private GenericApplicationContext gcontext;
+
+    @Autowired
+    private BeanDefinitionRegistry beanDefinitionRegistry;
 
     @BeforeEach
     void setup() {
@@ -78,7 +82,7 @@ class PipelineExecutionTest {
         );
 
         // 2. Регистрация пайплайна
-        registrar.registerPipeline(definition);
+        registrar.registerPipeline(definition,beanDefinitionRegistry);
 
         // Проверка: все бины должны быть зарегистрированы
         assertTrue(gcontext.containsBeanDefinition("TestOrderFlow_source-step"));
@@ -127,7 +131,7 @@ class PipelineExecutionTest {
                 new StepDefinition("s1", "Source", Map.of(), null, null)
         )
         );
-        registrar.registerPipeline(definition);
+        registrar.registerPipeline(definition,beanDefinitionRegistry);
 
         // 1. Выполняем пайплайн
         executor.executePipeline(definition);

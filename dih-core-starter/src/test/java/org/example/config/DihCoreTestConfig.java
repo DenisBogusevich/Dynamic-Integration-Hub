@@ -25,14 +25,5 @@ public class DihCoreTestConfig {
    // }
 
     // Предоставляем реальные зависимости для PipelineRegistrar
-    @Bean
-    public PipelineRegistrar pipelineRegistrar(StepTypeRegistry registry, GenericApplicationContext context) {
-        return new PipelineRegistrar(registry, context);
-    }
 
-    @Bean
-    public StepTypeRegistry stepTypeRegistry() {
-        // Мы регистрируем тестовый компонент в самом тесте
-        return new StepTypeRegistry();
-    }
 }

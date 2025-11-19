@@ -11,6 +11,8 @@ import org.example.service.PipelineRegistrar;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.BeanDefinitionBuilder;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Import;
@@ -41,6 +43,8 @@ class RetryAopTest {
 
     @Autowired
     private ApplicationContext applicationContext; // Для получения бина
+
+    private BeanDefinitionRegistry registryBean;
 
     @BeforeEach
     void setup() {
@@ -84,7 +88,7 @@ class RetryAopTest {
         );
 
         // 2. Регистрация (PipelineRegistrar сохранит политику в метаданных)
-        registrar.registerPipeline(definition);
+        registrar.registerPipeline(definition,registryBean);
 
         // 3. Исполнение
         String finalResult = null;
@@ -134,7 +138,7 @@ class RetryAopTest {
         );
 
         // 2. Регистрация
-        registrar.registerPipeline(definition);
+        registrar.registerPipeline(definition,registryBean);
 
         // 3. Исполнение: Ожидаем исключения
         Exception exception = Assertions.assertThrows(

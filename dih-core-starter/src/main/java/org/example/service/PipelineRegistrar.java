@@ -3,7 +3,9 @@ package org.example.service;
 import org.example.model.PipelineDefinition;
 import org.example.model.StepDefinition;
 import org.example.registry.StepTypeRegistry;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionBuilder;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.stereotype.Service;
 
@@ -11,11 +13,9 @@ import org.springframework.stereotype.Service;
 public class PipelineRegistrar {
 
     private final StepTypeRegistry stepTypeRegistry;
-    private final GenericApplicationContext genericApplicationContext;
 
-    public PipelineRegistrar(StepTypeRegistry stepTypeRegistry, GenericApplicationContext genericApplicationContext) {
+    public PipelineRegistrar(StepTypeRegistry stepTypeRegistry) {
         this.stepTypeRegistry = stepTypeRegistry;
-        this.genericApplicationContext = genericApplicationContext;
     }
 
     /**
@@ -24,7 +24,7 @@ public class PipelineRegistrar {
      *
      * @param definition The complete pipeline configuration DTO.
      */
-    public void registerPipeline(PipelineDefinition definition) {
+    public void registerPipeline(PipelineDefinition definition, BeanDefinitionRegistry registry) {
         // 1. Создаем уникальный префикс для всех бинов этого пайплайна
         String pipelineName = definition.name();
 
@@ -35,7 +35,7 @@ public class PipelineRegistrar {
 
         // 2. Итеративно регистрируем каждый шаг
         for (StepDefinition stepDef : definition.steps()) {
-            registerStepRecursive(pipelineName, stepDef);
+            registerStepRecursive(pipelineName, stepDef,registry);
         }
 
         System.out.println("Pipeline '" + pipelineName + "' and all steps registered successfully.");
@@ -47,7 +47,7 @@ public class PipelineRegistrar {
      * @param pipelineName Name of the pipeline (namespace prefix).
      * @param stepDefinition      The step configuration DTO.
      */
-    public void registerStep(String pipelineName, StepDefinition stepDefinition) {
+    public void registerStep(String pipelineName, StepDefinition stepDefinition,BeanDefinitionRegistry registry) {
         Class<?> stepClass = stepTypeRegistry.getStepClass(stepDefinition.type());
 
         BeanDefinitionBuilder stepDefinitionBuilder = BeanDefinitionBuilder.genericBeanDefinition(stepClass);
@@ -63,24 +63,19 @@ public class PipelineRegistrar {
                     "retryPolicy", stepDefinition.retryPolicy());
         }
 
-        stepDefinitionBuilder.setScope("pipeline");
+        stepDefinitionBuilder.setScope(BeanDefinition.SCOPE_SINGLETON);
 
         String beanName = pipelineName + "_" + stepDefinition.id();
 
-        genericApplicationContext.registerBeanDefinition(beanName, stepDefinitionBuilder.getBeanDefinition());
-        System.out.println("Registered bean: " + beanName);
+        registry.registerBeanDefinition(beanName, stepDefinitionBuilder.getBeanDefinition());
     }
 
-    private void registerStepRecursive(String pipelineName, StepDefinition stepDef) {
-        registerStep(pipelineName, stepDef);
+    private void registerStepRecursive(String pipelineName, StepDefinition stepDef, BeanDefinitionRegistry registry) {
+        registerStep(pipelineName, stepDef, registry);
 
-        if (stepDef.subSteps() != null && !stepDef.subSteps().isEmpty()) {
-            System.out.println("Found sub-steps in " + stepDef.id() + ". Registering branches.");
-
+        if (stepDef.subSteps() != null) {
             for (StepDefinition subStepDef : stepDef.subSteps()) {
-                // Примечание: Для вложенных шагов можно создать более длинный префикс
-                // (e.g., pipelineName_parentStepId) для дополнительной изоляции
-                registerStepRecursive(pipelineName, subStepDef);
+                registerStepRecursive(pipelineName, subStepDef, registry);
             }
         }
     }
