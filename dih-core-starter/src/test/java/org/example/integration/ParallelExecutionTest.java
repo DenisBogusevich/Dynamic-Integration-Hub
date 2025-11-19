@@ -50,6 +50,7 @@ class ParallelExecutionTest {
 
         @Override
         public String execute(String input, PipelineContext context) throws Exception {
+            System.out.println("Executing on: " + Thread.currentThread());
             // Проверка контекста внутри потока
             if (MDC.get("execution.id") == null) {
                 throw new IllegalStateException("MDC Context is lost in thread " + Thread.currentThread().getName());
@@ -63,6 +64,7 @@ class ParallelExecutionTest {
     static class FailingStep implements PipelineStep<String, String> {
         @Override
         public String execute(String input, PipelineContext context) {
+            System.out.println("Executing on: " + Thread.currentThread());
             throw new RuntimeException("I am designed to fail!");
         }
     }

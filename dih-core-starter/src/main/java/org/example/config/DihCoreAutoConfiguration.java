@@ -9,7 +9,11 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.beans.factory.config.CustomScopeConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.support.TaskExecutorAdapter;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executors;
 
 @Configuration
 @EnableConfigurationProperties(DihProperties.class) // <--- Включаем наши проперти
@@ -30,22 +34,25 @@ public class DihCoreAutoConfiguration {
         return configurer;
     }
 
-    @Bean
+    @Bean(name = "dihTaskExecutor")
     @ConditionalOnMissingBean(name = "dihTaskExecutor")
-    public ThreadPoolTaskExecutor dihTaskExecutor(DihProperties properties) { // <--- Инжектируем настройки
-        log.info("Initializing DIH ThreadPool with Core={}, Max={}, Queue={}",
-                properties.getCorePoolSize(), properties.getMaxPoolSize(), properties.getQueueCapacity());
+    public AsyncTaskExecutor dihTaskExecutor(DihProperties properties) {
+        log.info("Initializing DIH Executor with Virtual Threads (Java 21+)");
 
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        // Создаем фабрику, которая именует потоки (полезно для дебага)
+        var factory = Thread.ofVirtual()
+                .name(properties.getThreadNamePrefix(), 0)
+                .factory();
 
-        // Берем значения из properties, а не хардкод
-        executor.setCorePoolSize(properties.getCorePoolSize());
-        executor.setMaxPoolSize(properties.getMaxPoolSize());
-        executor.setQueueCapacity(properties.getQueueCapacity());
-        executor.setThreadNamePrefix(properties.getThreadNamePrefix());
+        // Создаем ExecutorService на виртуальных потоках
+        var virtualExecutor = Executors.newThreadPerTaskExecutor(factory);
 
-        executor.setTaskDecorator(new DihTaskDecorator());
-        executor.initialize();
-        return executor;
+        // Оборачиваем в Spring-совместимый адаптер
+        TaskExecutorAdapter adapter = new TaskExecutorAdapter(virtualExecutor);
+
+        // Подключаем наш TaskDecorator для проброса контекста
+        adapter.setTaskDecorator(new DihTaskDecorator());
+
+        return adapter;
     }
 }

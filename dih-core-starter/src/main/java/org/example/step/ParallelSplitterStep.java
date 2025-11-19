@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.ResolvableType;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.List;
@@ -24,7 +25,7 @@ public class ParallelSplitterStep<I, O> implements PipelineStep<I, O> {
     @Autowired
     private ApplicationContext springContext;
     @Autowired // Инжектируем наш настроенный Executor
-    private ThreadPoolTaskExecutor dihTaskExecutor;
+    private AsyncTaskExecutor dihTaskExecutor;
 
     // ВАЖНО: Эта логика предполагает, что ParallelSplitterStep
     // получает список ID шагов или StepDefinition через property injection.
